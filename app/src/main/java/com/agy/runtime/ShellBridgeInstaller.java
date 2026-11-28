@@ -35,7 +35,7 @@ public final class ShellBridgeInstaller {
     /** Records which prefix the bulk bridges were generated for. Bump when the
      *  bridge script format changes so a warm launch regenerates them once. */
     private static final String BRIDGE_MARKER = ".agy-bridges";
-    private static final int BRIDGE_FORMAT = 5;
+    private static final int BRIDGE_FORMAT = 6;
 
     private static final String[] PRIVILEGE_SHIMS = {
             "rish", "su", "sudo", "agy-root", "agy-sys"
@@ -63,10 +63,7 @@ public final class ShellBridgeInstaller {
         if (!sh.isFile()) {
             writeScript(sh, "#!/system/bin/sh\n# AGY fallback shell\nexec /system/bin/sh \"$@\"\n");
         }
-        File node = new File(bin, "node");
-        if (!node.isFile()) {
-            writeScript(node, "#!/system/bin/sh\n# AGY fallback node shim\necho \"node: not installed in this environment\" >&2\nexit 127\n");
-        }
+        writeNodeBridge(new File(bin, "node"), context);
         writeTorchShims(bin, context);
     }
 
@@ -155,7 +152,7 @@ public final class ShellBridgeInstaller {
             for (File toolFile : prefixTools) {
                 if (toolFile.isFile()) {
                     String name = toolFile.getName();
-                    if (isPrivilegeShim(name) || isOpenUrlShim(name)) {
+                    if (isPrivilegeShim(name) || isOpenUrlShim(name) || "node".equals(name)) {
                         continue;
                     }
                     writeBridge(new File(bin, name), prefix, name, appId);
@@ -244,6 +241,48 @@ public final class ShellBridgeInstaller {
         sb.append("  /system/bin/am start -a android.intent.action.VIEW -d \"$URL\" >/dev/null 2>&1 || true\n");
         sb.append("fi\n");
         sb.append("exit 0\n");
+        writeScript(bridge, sb.toString());
+    }
+
+    /**
+     * Writes a dynamic Bionic bridge for {@code node}. Always checks {@code $PREFIX/bin/node}
+     * at invocation time so installing {@code nodejs-lts} later works immediately without
+     * leaving a stale static fallback shim behind.
+     */
+    private static void writeNodeBridge(File bridge, android.content.Context context) {
+        String appId = (context != null) ? context.getPackageName() : "com.agy";
+        StringBuilder sb = new StringBuilder();
+        sb.append("#!/system/bin/sh\n");
+        sb.append("# AGY dynamic bridge -> bionic $PREFIX/bin/node\n");
+        if (context != null) {
+            File prefix = EnvInstaller.prefix(context);
+            sb.append("PREFIX=").append(ShellQuote.quote(prefix.getAbsolutePath())).append('\n');
+        } else {
+            sb.append("PREFIX=\"${PREFIX:-$(dirname \"$0\")/../../usr}\"\n");
+        }
+        sb.append("AGY_APPLICATION_ID=").append(ShellQuote.quote(appId)).append('\n');
+        sb.append("export PREFIX AGY_APPLICATION_ID\n");
+        sb.append("unset LD_PRELOAD\n");
+        sb.append("export LD_LIBRARY_PATH=\"$PREFIX/lib\"\n");
+        sb.append("export PATH=\"$PREFIX/bin:/system/bin\"\n");
+        sb.append("export GODEBUG=\"netdns=cgo\"\n");
+        sb.append("export TERM=\"xterm-256color\"\n");
+        sb.append("export TERMINFO=\"$PREFIX/share/terminfo\"\n");
+        sb.append("export OPENSSL_CONF=\"$PREFIX/etc/tls/openssl.cnf\"\n");
+        sb.append("export SSL_CERT_FILE=\"$PREFIX/etc/tls/cert.pem\"\n");
+        sb.append("export CURL_CA_BUNDLE=\"$PREFIX/etc/tls/cert.pem\"\n");
+        sb.append("export GIT_SSL_CAINFO=\"$PREFIX/etc/tls/cert.pem\"\n");
+        sb.append("export GIT_CONFIG_NOSYSTEM=1\n");
+        sb.append("export GIT_ATTR_NOSYSTEM=1\n");
+        sb.append("export GIT_TEMPLATE_DIR=\"$PREFIX/share/git-core/templates\"\n");
+        sb.append("export GIT_EXEC_PATH=\"$PREFIX/libexec/git-core\"\n");
+        sb.append("export PAGER=\"cat\"\n");
+        sb.append("if [ -x \"$PREFIX/bin/node\" ]; then\n");
+        sb.append("  exec \"$PREFIX/bin/node\" \"$@\"\n");
+        sb.append("else\n");
+        sb.append("  echo \"node: not installed in this environment (run: pkg install nodejs-lts)\" >&2\n");
+        sb.append("  exit 127\n");
+        sb.append("fi\n");
         writeScript(bridge, sb.toString());
     }
 

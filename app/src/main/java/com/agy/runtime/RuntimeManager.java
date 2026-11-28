@@ -80,6 +80,10 @@ public final class RuntimeManager {
         return paths.getProjectsDir();
     }
 
+    public File getConfigPluginsDir() {
+        return paths.getConfigPluginsDir();
+    }
+
     /**
      * Phase 1: extract {@code assets/runtime} (the core + glibc) and the web UI,
      * verify the runtime manifest sha256 (fail-closed), and prepare DNS/onboarding.

@@ -2,17 +2,25 @@ package com.agy.bridge;
 
 import android.content.Context;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
 
+import com.agy.fs.ProjectFolderDeleter;
+import com.agy.oauth.GitHubDeviceAuth;
 import com.agy.runtime.RuntimeManager;
 import com.agy.shell.RootBridge;
 import com.agy.shell.ShizukuBridge;
 import com.agy.theme.ThemeManager;
 import com.agy.ui.MainActivity;
 
+import org.json.JSONObject;
+
 import java.lang.ref.WeakReference;
 import java.nio.charset.Charset;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 /**
  * Minimal, low-privilege JavaScript bridge for the app UI. It is visible to
@@ -27,6 +35,22 @@ public final class AndroidBridge {
     private final EngineBridge engine;
     private final EngineConfigJson config;
     private final String blobBridgeToken = createBlobBridgeToken();
+    private final ExecutorService githubAuthExecutor = Executors.newFixedThreadPool(2, new ThreadFactory() {
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "AgyGitHubDeviceAuth");
+            t.setDaemon(true);
+            return t;
+        }
+    });
+    private final ExecutorService projectDeleteExecutor = Executors.newSingleThreadExecutor(new ThreadFactory() {
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "AgyProjectFolderDelete");
+            t.setDaemon(true);
+            return t;
+        }
+    });
     private volatile WeakReference<MainActivity> activityRef;
 
     public AndroidBridge(Context context, RuntimeManager runtime,
@@ -144,6 +168,16 @@ public final class AndroidBridge {
      */
     @JavascriptInterface
     public void notifyAgentEvent(String token, String eventType, String title, String body) {
+        notifyAgentEventRich(token, eventType, title, body, null, null, false);
+    }
+
+    /**
+     * Posts a native Android notification with conversation deep-link metadata when
+     * the agent completes a task, replies, or needs input while backgrounded.
+     */
+    @JavascriptInterface
+    public void notifyAgentEventRich(String token, String eventType, String title, String body,
+                                     String conversationId, String notificationId, boolean silent) {
         if (!matchesNativeBridgeToken(token)) {
             return;
         }
@@ -152,7 +186,23 @@ public final class AndroidBridge {
         }
         String tag = (eventType != null && !eventType.trim().isEmpty())
                 ? ("agy_agent_" + eventType.trim()) : "agy_agent_done";
-        com.agy.gateway.handlers.NotificationHandler.postAgentAlert(appContext, tag, title, body);
+        com.agy.gateway.handlers.NotificationHandler.postAgentAlert(
+                appContext, tag, title, body, conversationId, silent);
+    }
+
+    /** Returns true iff MainActivity is currently resumed in the foreground. */
+    @JavascriptInterface
+    public boolean isInForeground() {
+        return MainActivity.isInForeground();
+    }
+
+    /** Opens Android's per-app notification settings screen. */
+    @JavascriptInterface
+    public void openNotificationSettings(String token) {
+        if (!matchesNativeBridgeToken(token)) {
+            return;
+        }
+        com.agy.gateway.handlers.NotificationHandler.openNotificationSettings(appContext);
     }
 
     /**
@@ -217,6 +267,81 @@ public final class AndroidBridge {
         }
     }
 
+    /**
+     * Starts GitHub OAuth Device Flow asynchronously (POST https://github.com/login/device/code)
+     * and delivers the JSON response to {@code window.__agGitHubDeviceAuthCallback(reqId, json)}.
+     */
+    @JavascriptInterface
+    public void startGitHubDeviceAuth(String token, final String reqId, final String scope) {
+        if (!matchesNativeBridgeToken(token) || reqId == null || reqId.trim().isEmpty()) {
+            return;
+        }
+        githubAuthExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                JSONObject res = GitHubDeviceAuth.startDeviceFlow(scope);
+                dispatchGitHubDeviceAuthCallback(reqId, res);
+            }
+        });
+    }
+
+    /**
+     * Polls GitHub OAuth Device Flow asynchronously (POST https://github.com/login/oauth/access_token)
+     * and delivers the JSON response to {@code window.__agGitHubDeviceAuthCallback(reqId, json)}.
+     */
+    @JavascriptInterface
+    public void pollGitHubDeviceAuth(String token, final String reqId, final String deviceCode) {
+        if (!matchesNativeBridgeToken(token) || reqId == null || reqId.trim().isEmpty()) {
+            return;
+        }
+        githubAuthExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                JSONObject res = GitHubDeviceAuth.pollDeviceFlow(deviceCode);
+                dispatchGitHubDeviceAuthCallback(reqId, res);
+            }
+        });
+    }
+
+    /** Opens GitHub's device verification page (strictly restricted to github.com/login/device). */
+    @JavascriptInterface
+    public boolean openGitHubDevicePage(String token, String verificationUri) {
+        if (!matchesNativeBridgeToken(token)) {
+            return false;
+        }
+        return GitHubDeviceAuth.openVerificationUrl(appContext, verificationUri);
+    }
+
+    /** Copies the GitHub device user code to Android's clipboard on the UI thread. */
+    @JavascriptInterface
+    public boolean copyGitHubDeviceCode(String token, String userCode) {
+        if (!matchesNativeBridgeToken(token)) {
+            return false;
+        }
+        return GitHubDeviceAuth.copyUserCode(appContext, userCode);
+    }
+
+    private void dispatchGitHubDeviceAuthCallback(final String reqId, final JSONObject result) {
+        final MainActivity act = activityRef != null ? activityRef.get() : MainActivity.activeActivity;
+        final WebView wv = act != null ? act.getWebView() : null;
+        if (wv == null || reqId == null || result == null) {
+            return;
+        }
+        final String payloadStr = result.toString();
+        wv.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String js = "window.__agGitHubDeviceAuthCallback && window.__agGitHubDeviceAuthCallback("
+                            + JSONObject.quote(reqId) + ","
+                            + JSONObject.quote(payloadStr) + ");";
+                    wv.evaluateJavascript(js, null);
+                } catch (Throwable ignored) {
+                }
+            }
+        });
+    }
+
     /** Returns sanitized saved account summaries for the top-level UI document. */
     @JavascriptInterface
     public String getSavedAccounts(String token) {
@@ -251,6 +376,30 @@ public final class AndroidBridge {
             return "[]";
         }
         return com.agy.oauth.AccountVaultStore.removeAccount(appContext, accountId);
+    }
+
+    /**
+     * Safely deletes a local project directory on a background executor after strict
+     * token and path-safety validation. Returns JSON {@code {ok, path, error}}.
+     */
+    @JavascriptInterface
+    public String deleteProjectFolder(String token, String rawPath) {
+        if (!matchesNativeBridgeToken(token)) {
+            return ProjectFolderDeleter.buildJson(false, "", "Unauthorized bridge call");
+        }
+        final ProjectFolderDeleter.ValidationResult validation =
+                ProjectFolderDeleter.validateTarget(appContext, rawPath);
+        if (!validation.ok) {
+            return ProjectFolderDeleter.buildJson(false, validation.canonicalPath, validation.error);
+        }
+        projectDeleteExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                ProjectFolderDeleter.deleteValidatedDirectory(
+                        validation.canonicalDir, validation.canonicalPath);
+            }
+        });
+        return ProjectFolderDeleter.buildJson(true, validation.canonicalPath, "");
     }
 
     /** Cleanly restarts the core service and reloads WebView if hot-swap verification requires it. */

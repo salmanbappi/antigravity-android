@@ -59,11 +59,16 @@ public final class CustomTabLauncher {
         if (context == null || url == null || url.trim().isEmpty()) {
             return false;
         }
+        String trimmedUrl = url.trim();
+        String effectiveUrl = GoogleOAuthUrlRewriter.ensureAccountChooser(trimmedUrl);
+        if (!effectiveUrl.equals(trimmedUrl)) {
+            Log.i(TAG, "rewrote Google OAuth URL to force account chooser");
+        }
         final Uri uri;
         try {
-            uri = Uri.parse(url.trim());
+            uri = Uri.parse(effectiveUrl);
         } catch (Exception e) {
-            Log.e(TAG, "bad url: " + SensitiveDataRedactor.safeUrl(url), e);
+            Log.e(TAG, "bad url: " + SensitiveDataRedactor.safeUrl(effectiveUrl), e);
             return false;
         }
 

@@ -155,7 +155,14 @@ public final class SeedPackageInstaller {
 
     private static boolean isPackageAvailable(Context context, File prefix,
                                               String packageName, File logFile) {
-        String executable = "python".equals(packageName) ? "python3" : packageName;
+        String executable;
+        if ("python".equals(packageName)) {
+            executable = "python3";
+        } else if ("nodejs".equals(packageName) || "nodejs-lts".equals(packageName)) {
+            executable = "node";
+        } else {
+            executable = packageName;
+        }
         File binary = new File(prefix, "bin/" + executable);
         if (!binary.isFile()) {
             return false;

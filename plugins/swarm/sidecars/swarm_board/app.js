@@ -38,6 +38,12 @@
     clampsDirty: false,  // deferred "Show more" overflow check while hidden
     graphCache: null,
     graphHasPulse: false,
+    lastGraphSvg: '',
+    lastGraphStruct: '',
+    lastGraphViewBox: '',
+    lastGraphHeight: 0,
+    lastReplayLabel: '',
+    lastReplayCapKey: '',
     // Lazy Raw tab payload fetched from /api/swarm/raw under omitRaw=1.
     loadedRaw: null,
     loadedRawKey: '',
@@ -1621,8 +1627,15 @@
     const g = buildGraphState(s, all, { replaying, upto, expandAll, hideInactive, width });
     const { nodes, pos, height, edges, unaddressed, broadcasts, current, curTargets, max, isActive, isCur } = g;
 
-    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-    svg.style.height = `${height}px`;
+    const vb = `0 0 ${width} ${height}`;
+    if (state.lastGraphViewBox !== vb) {
+      state.lastGraphViewBox = vb;
+      svg.setAttribute('viewBox', vb);
+    }
+    if (state.lastGraphHeight !== height) {
+      state.lastGraphHeight = height;
+      svg.style.height = `${height}px`;
+    }
 
     // renderGraph rebuilds the SVG on every snapshot change (member
     // transcripts change it every poll while members work), on resize and on
@@ -1663,7 +1676,8 @@
     state.graphHasPulse = hadPulse;
     const defs = '<marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse">' +
         '<path class="arrowhead" d="M1,1.2 L9,5 L1,8.8 Q2.6,5 1,1.2 z"/></marker>';
-    let nodesSvg = '';
+    let nodesSvg = '', nodesStruct = '';
+    const nodeTips = [];
     for (const n of nodes) {
       const p = pos.get(n.id);
       if (n.m) n.m = memberOf(n.id) || n.m;
@@ -1683,9 +1697,10 @@
       const tip = n.m
         ? `${n.id} · ${n.m.role}${n.m.model ? ' · ' + n.m.model : ''} · ${statusLabel(status)} · ${n.m.steps || 0} steps · ${n.m.posts} posts · ${n.m.unread} unread${ring ? ` · ${ring} unaddressed` : ''}${broadcasts.get(n.id) ? ` · ${broadcasts.get(n.id)} @all` : ''}${n.m.activity && status === 'working' ? `\n${n.m.activity}` : ''}${n.m.owner ? `\non ${n.m.owner.label}` : ''}${n.m.conversation_id && n.m.local !== false && canOpenConversation() ? '\nClick to open conversation' : ''}`
         : `${n.id} (not on the roster)`;
+      nodeTips.push(tip);
       const cls = ['node', isActive(n.id) ? '' : 'inactive', hot ? 'hot' : '', status === 'killed' ? 'killed' : '', n.m ? '' : 'outsider'].filter(Boolean).join(' ');
-      nodesSvg += `<g class="${cls}" data-conv="${esc(n.m?.conversation_id || '')}">` +
-        `<title>${esc(tip)}</title>` +
+      const openTag = `<g class="${cls}" data-conv="${esc(n.m?.conversation_id || '')}">`;
+      const body =
         (ring ? `<rect class="ring" x="${p.x - p.w / 2 - 4}" y="${p.y - p.h / 2 - 4}" width="${p.w + 8}" height="${p.h + 8}" rx="${p.h / 2 + 4}"/>` : '') +
         `<rect class="node-box" x="${p.x - p.w / 2}" y="${p.y - p.h / 2}" width="${p.w}" height="${p.h}" rx="${p.h / 2}"/>` +
         (beeSrc ? `<image class="node-bee" href="${beeSrc}" x="${beeX}" y="${p.y - 9}" width="22" height="18"/>` : '') +
@@ -1694,11 +1709,27 @@
         (bcast ? `<g class="bcast"><rect x="${p.x + p.w / 2 - bw + 6}" y="${p.y - p.h / 2 - 7}" width="${bw}" height="14" rx="7"/>` +
           `<text x="${p.x + p.w / 2 - bw / 2 + 6}" y="${p.y - p.h / 2 + 3}" text-anchor="middle">@all ${bcast}</text></g>` : '') +
         `</g>`;
+      nodesStruct += openTag + body;
+      nodesSvg += `${openTag}<title>${esc(tip)}</title>${body}`;
     }
-    svg.innerHTML = `<defs>${defs}</defs>${edgesSvg}${nodesSvg}${countsSvg}${dots}`;
-    // SVG animations inserted via innerHTML start on the document clock (long past),
-    // so trigger the travelling dots explicitly.
-    svg.querySelectorAll('.dot-anim').forEach((a) => a.beginElement?.());
+    const svgStruct = `<defs>${defs}</defs>${edgesSvg}${nodesStruct}${countsSvg}${dots}`;
+    const svgHtml = `<defs>${defs}</defs>${edgesSvg}${nodesSvg}${countsSvg}${dots}`;
+    if (state.lastGraphStruct !== svgStruct || animateCur || hadPulse || svg.childElementCount === 0) {
+      state.lastGraphStruct = svgStruct;
+      state.lastGraphSvg = svgHtml;
+      svg.innerHTML = svgHtml;
+      // SVG animations inserted via innerHTML start on the document clock (long past),
+      // so trigger the travelling dots explicitly.
+      svg.querySelectorAll('.dot-anim').forEach((a) => a.beginElement?.());
+    } else if (state.lastGraphSvg !== svgHtml) {
+      // Only volatile tooltip text (steps/activity) changed — update <title> in place
+      // so Live polls never tear down and re-decode <image> bee nodes.
+      state.lastGraphSvg = svgHtml;
+      const titles = svg.querySelectorAll('g.node > title');
+      for (let i = 0; i < titles.length && i < nodeTips.length; i++) {
+        if (titles[i].textContent !== nodeTips[i]) titles[i].textContent = nodeTips[i];
+      }
+    }
     renderReplayBar(all, upto, current);
   }
 
@@ -1706,9 +1737,12 @@
     const total = replay.idx === null ? totalGraphCount() : all.length;
     const shownUpto = replay.idx === null ? total : upto;
     const slider = $('replay-slider');
-    slider.max = String(total);
-    slider.value = String(shownUpto);
-    slider.style.setProperty('--pct', `${total ? (100 * shownUpto) / total : 100}%`);
+    const maxStr = String(total);
+    const valStr = String(shownUpto);
+    const pctStr = `${total ? (100 * shownUpto) / total : 100}%`;
+    if (slider.max !== maxStr) slider.max = maxStr;
+    if (slider.value !== valStr) slider.value = valStr;
+    if (slider.style.getPropertyValue('--pct') !== pctStr) slider.style.setProperty('--pct', pctStr);
     const play = $('replay-play');
     const playIcon = replay.playing ? 'pause' : 'play';
     if (play.dataset.icon !== playIcon) {
@@ -1717,28 +1751,41 @@
       play.setAttribute('aria-label', replay.playing ? 'Pause replay' : 'Play replay');
     }
     const liveBtn = $('replay-live');
-    liveBtn.classList.toggle('on', replay.idx === null);
-    liveBtn.setAttribute('aria-pressed', String(replay.idx === null));
-    $('replay-start').disabled = replay.idx === 0;
-    $('replay-back').disabled = shownUpto <= 0;
-    $('replay-fwd').disabled = replay.idx === null || shownUpto >= total;
-    const t0 = replay.idx === null && state.messagesOffset > 0 && Number.isFinite(state.firstPostTs)
+    const isLive = replay.idx === null;
+    if (liveBtn.classList.contains('on') !== isLive) liveBtn.classList.toggle('on', isLive);
+    const liveAria = String(isLive);
+    if (liveBtn.getAttribute('aria-pressed') !== liveAria) liveBtn.setAttribute('aria-pressed', liveAria);
+    const startDis = replay.idx === 0;
+    const backDis = shownUpto <= 0;
+    const fwdDis = isLive || shownUpto >= total;
+    if ($('replay-start').disabled !== startDis) $('replay-start').disabled = startDis;
+    if ($('replay-back').disabled !== backDis) $('replay-back').disabled = backDis;
+    if ($('replay-fwd').disabled !== fwdDis) $('replay-fwd').disabled = fwdDis;
+    const t0 = isLive && state.messagesOffset > 0 && Number.isFinite(state.firstPostTs)
       ? state.firstPostTs
       : (all.length ? msgMs(all[0]) : 0);
     const label = $('replay-label');
-    if (replay.idx === null) {
-      label.innerHTML = `<b>${plural(total, 'post')}</b>` + (total > 1 && all.length ? ` over ${esc(fmtDur(msgMs(all[all.length - 1]) - t0))}` : '');
-    } else {
-      label.innerHTML = `<b>${upto}</b> of ${all.length}` + (current ? ` · #${current.seq} at ${esc(fmtClock(msgMs(current)))} (+${esc(fmtDur(msgMs(current) - t0))})` : '');
+    const nextLabel = isLive
+      ? `<b>${plural(total, 'post')}</b>` + (total > 1 && all.length ? ` over ${esc(fmtDur(msgMs(all[all.length - 1]) - t0))}` : '')
+      : `<b>${upto}</b> of ${all.length}` + (current ? ` · #${current.seq} at ${esc(fmtClock(msgMs(current)))} (+${esc(fmtDur(msgMs(current) - t0))})` : '');
+    if (state.lastReplayLabel !== nextLabel) {
+      state.lastReplayLabel = nextLabel;
+      label.innerHTML = nextLabel;
     }
     const cap = $('replay-caption');
     if (!current) {
-      cap.classList.add('hidden');
-      cap.innerHTML = '';
+      if (!cap.classList.contains('hidden')) cap.classList.add('hidden');
+      if (state.lastReplayCapKey !== '') {
+        state.lastReplayCapKey = '';
+        cap.innerHTML = '';
+      }
       return;
     }
-    cap.classList.remove('hidden');
-    cap.innerHTML = `<div class="msg-head">
+    const capKey = `${current.seq}\0${current.text || ''}`;
+    if (cap.classList.contains('hidden')) cap.classList.remove('hidden');
+    if (state.lastReplayCapKey !== capKey) {
+      state.lastReplayCapKey = capKey;
+      cap.innerHTML = `<div class="msg-head">
           <span class="msg-who">
             <span class="msg-author">${esc(current.agent)}</span>
             ${recipientsHtml(current)}
@@ -1746,7 +1793,8 @@
           <span class="ts" title="${esc(`#${current.seq} · ${fmtFull(msgMs(current))}`)}">${esc(fmtClock(msgMs(current)))}</span>
         </div>
         <div class="msg-body md open">${md(current.text)}</div>`;
-    sizeReplayCaption();
+      sizeReplayCaption();
+    }
   }
 
   // Lets the replay caption's body grow to the bottom of the pane (less the

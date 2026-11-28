@@ -140,34 +140,75 @@ else
 fi
 rm -rf "$UPG_TMP"
 
-# ---- pkg runtime bridge selective generation -------------------------------
+# ---- pkg runtime bridge selective generation & fallback replacement --------
 BRIDGE_TMP="$(mktemp -d)"
 mkdir -p "$BRIDGE_TMP/usr/bin" "$BRIDGE_TMP/runtime/bin"
-touch "$BRIDGE_TMP/usr/bin/existing_bin" "$BRIDGE_TMP/usr/bin/new_bin"
-# Verify pkg install_one bridge block logic creates bridge only for newly installed binary
-pkg_files="bin/new_bin"
-PREFIX="$BRIDGE_TMP/usr"
-runtime_bin="$PREFIX/../runtime/bin"
-if [ -d "$runtime_bin" ] && [ -n "$pkg_files" ]; then
-    while IFS= read -r p; do
-        case "$p" in
-            bin/*)
-                bname="${p#bin/}"
-                case "$bname" in */*|"") continue ;; esac
-                bin_file="$PREFIX/bin/$bname"
-                [ -f "$bin_file" ] || [ -L "$bin_file" ] || continue
-                if [ ! -f "$runtime_bin/$bname" ]; then
-                    printf '#!/system/bin/sh\nexec "$PREFIX/bin/%s" "$@"\n' "$bname" > "$runtime_bin/$bname"
-                    chmod 755 "$runtime_bin/$bname"
-                fi
-                ;;
-        esac
-    done <<< "$pkg_files"
-fi
-if [ -f "$BRIDGE_TMP/runtime/bin/new_bin" ] && [ ! -f "$BRIDGE_TMP/runtime/bin/existing_bin" ]; then
-    ok "pkg generates bridges only for package binaries"
+touch "$BRIDGE_TMP/usr/bin/existing_bin" "$BRIDGE_TMP/usr/bin/new_bin" \
+      "$BRIDGE_TMP/usr/bin/node" "$BRIDGE_TMP/usr/bin/custom_bin"
+cat > "$BRIDGE_TMP/runtime/bin/node" <<'EOF'
+#!/system/bin/sh
+# AGY fallback node shim
+echo "node: not installed in this environment" >&2
+exit 127
+EOF
+cat > "$BRIDGE_TMP/runtime/bin/custom_bin" <<'EOF'
+#!/system/bin/sh
+# Custom non-fallback bridge
+exec /system/bin/true "$@"
+EOF
+chmod 755 "$BRIDGE_TMP/runtime/bin/node" "$BRIDGE_TMP/runtime/bin/custom_bin"
+if (
+    PREFIX="$BRIDGE_TMP/usr"
+    export PREFIX
+    . "$PKG_DIR/pkg"
+    write_runtime_bridges $'bin/new_bin\nbin/node\nbin/custom_bin'
+); then
+    if [ -f "$BRIDGE_TMP/runtime/bin/new_bin" ] && [ ! -f "$BRIDGE_TMP/runtime/bin/existing_bin" ]; then
+        ok "pkg generates bridges only for package binaries"
+    else
+        bad "pkg generates bridges only for package binaries"
+    fi
+    if grep -Fq 'unset LD_PRELOAD' "$BRIDGE_TMP/runtime/bin/node" \
+            && grep -Fq 'exec "$PREFIX/bin/node" "$@"' "$BRIDGE_TMP/runtime/bin/node" \
+            && ! grep -q '^# AGY fallback' "$BRIDGE_TMP/runtime/bin/node"; then
+        ok "pkg overwrites # AGY fallback shim with clean bionic bridge"
+    else
+        bad "pkg overwrites # AGY fallback shim with clean bionic bridge"
+    fi
+    if grep -Fq '# Custom non-fallback bridge' "$BRIDGE_TMP/runtime/bin/custom_bin"; then
+        ok "pkg preserves existing non-fallback bridge"
+    else
+        bad "pkg preserves existing non-fallback bridge"
+    fi
 else
-    bad "pkg generates bridges only for package binaries"
+    bad "pkg write_runtime_bridges execution failed"
+fi
+if command -v python3 >/dev/null 2>&1 && [ -f "$PKG_LIB/pkg_core.py" ]; then
+    PY_BRIDGE_TMP="$(mktemp -d)"
+    mkdir -p "$PY_BRIDGE_TMP/usr/bin" "$PY_BRIDGE_TMP/runtime/bin"
+    touch "$PY_BRIDGE_TMP/usr/bin/node" "$PY_BRIDGE_TMP/usr/bin/custom_bin"
+    cat > "$PY_BRIDGE_TMP/runtime/bin/node" <<'EOF'
+#!/system/bin/sh
+# AGY fallback node shim
+echo "node: not installed in this environment" >&2
+exit 127
+EOF
+    cat > "$PY_BRIDGE_TMP/runtime/bin/custom_bin" <<'EOF'
+#!/system/bin/sh
+# Custom non-fallback bridge
+exec /system/bin/true "$@"
+EOF
+    if python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import pkg_core; pkg_core._write_runtime_bridges(sys.argv[2], ['bin/node', 'bin/custom_bin'])" \
+            "$PKG_LIB" "$PY_BRIDGE_TMP/usr" \
+            && grep -Fq 'unset LD_PRELOAD' "$PY_BRIDGE_TMP/runtime/bin/node" \
+            && grep -Fq 'exec "$PREFIX/bin/node" "$@"' "$PY_BRIDGE_TMP/runtime/bin/node" \
+            && ! grep -q '^# AGY fallback' "$PY_BRIDGE_TMP/runtime/bin/node" \
+            && grep -Fq '# Custom non-fallback bridge' "$PY_BRIDGE_TMP/runtime/bin/custom_bin"; then
+        ok "pkg_core.py overwrites # AGY fallback shim and preserves non-fallback bridge"
+    else
+        bad "pkg_core.py overwrites # AGY fallback shim and preserves non-fallback bridge"
+    fi
+    rm -rf "$PY_BRIDGE_TMP"
 fi
 rm -rf "$BRIDGE_TMP"
 

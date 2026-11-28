@@ -758,6 +758,17 @@ def stage_install_deb(
     return unique_files
 
 
+def _is_agy_fallback_shim(path: str) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("# AGY fallback"):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def _write_runtime_bridges(prefix: str, rel_files: List[str]) -> None:
     runtime_bin = os.path.normpath(os.path.join(prefix, "..", "runtime", "bin"))
     if not os.path.isdir(runtime_bin):
@@ -772,21 +783,28 @@ def _write_runtime_bridges(prefix: str, rel_files: List[str]) -> None:
         if not (os.path.isfile(bin_file) or os.path.islink(bin_file)):
             continue
         bridge = os.path.join(runtime_bin, bname)
-        if os.path.exists(bridge):
+        if os.path.exists(bridge) and not _is_agy_fallback_shim(bridge):
             continue
         body = (
             "#!/system/bin/sh\n"
+            f"# AGY bridge -> bionic $PREFIX/bin/{bname}\n"
             f"PREFIX='{prefix}'\n"
             "export PREFIX\n"
-            'if [ -f "$PREFIX/lib/libtermux-exec.so" ]; then\n'
-            '  export LD_PRELOAD="$PREFIX/lib/libtermux-exec.so"\n'
-            "else\n"
-            "  unset LD_PRELOAD\n"
-            "fi\n"
+            "unset LD_PRELOAD\n"
             'export LD_LIBRARY_PATH="$PREFIX/lib"\n'
             'export PATH="$PREFIX/bin:/system/bin"\n'
+            'export GODEBUG="netdns=cgo"\n'
+            'export TERM="xterm-256color"\n'
+            'export TERMINFO="$PREFIX/share/terminfo"\n'
             'export OPENSSL_CONF="$PREFIX/etc/tls/openssl.cnf"\n'
             'export SSL_CERT_FILE="$PREFIX/etc/tls/cert.pem"\n'
+            'export CURL_CA_BUNDLE="$PREFIX/etc/tls/cert.pem"\n'
+            'export GIT_SSL_CAINFO="$PREFIX/etc/tls/cert.pem"\n'
+            'export GIT_CONFIG_NOSYSTEM=1\n'
+            'export GIT_ATTR_NOSYSTEM=1\n'
+            'export GIT_TEMPLATE_DIR="$PREFIX/share/git-core/templates"\n'
+            'export GIT_EXEC_PATH="$PREFIX/libexec/git-core"\n'
+            'export PAGER="cat"\n'
             f'exec "$PREFIX/bin/{bname}" "$@"\n'
         )
         with open(bridge, "w", encoding="utf-8") as f:

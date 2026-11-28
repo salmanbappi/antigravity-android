@@ -2,7 +2,7 @@
 # pkg -- self-written package manager for the tlx environment.
 set -uo pipefail
 
-PKG_SELF="$(cd "$(dirname "$0")" && pwd)"
+PKG_SELF="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PKG_LIB="$PKG_SELF/lib"
 
 . "$PKG_LIB/util.sh"
@@ -79,6 +79,49 @@ install_one() {
     install_cached_deb "$name" "$ver" "$arch" "$cache" "$keep_cache"
 }
 
+write_runtime_bridges() {
+    local pkg_files="${1:-}"
+    local runtime_bin="$PREFIX/../runtime/bin"
+    if [ -d "$runtime_bin" ] && [ -n "$pkg_files" ]; then
+        local p bname bin_file
+        while IFS= read -r p; do
+            case "$p" in
+                bin/*)
+                    bname="${p#bin/}"
+                    case "$bname" in */*|"") continue ;; esac
+                    bin_file="$PREFIX/bin/$bname"
+                    [ -f "$bin_file" ] || [ -L "$bin_file" ] || continue
+                    if [ ! -f "$runtime_bin/$bname" ] || grep -q '^# AGY fallback' "$runtime_bin/$bname" 2>/dev/null; then
+                        cat > "$runtime_bin/$bname" <<EOF
+#!/system/bin/sh
+# AGY bridge -> bionic \$PREFIX/bin/$bname
+PREFIX='$PREFIX'
+export PREFIX
+unset LD_PRELOAD
+export LD_LIBRARY_PATH="\$PREFIX/lib"
+export PATH="\$PREFIX/bin:/system/bin"
+export GODEBUG="netdns=cgo"
+export TERM="xterm-256color"
+export TERMINFO="\$PREFIX/share/terminfo"
+export OPENSSL_CONF="\$PREFIX/etc/tls/openssl.cnf"
+export SSL_CERT_FILE="\$PREFIX/etc/tls/cert.pem"
+export CURL_CA_BUNDLE="\$PREFIX/etc/tls/cert.pem"
+export GIT_SSL_CAINFO="\$PREFIX/etc/tls/cert.pem"
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_ATTR_NOSYSTEM=1
+export GIT_TEMPLATE_DIR="\$PREFIX/share/git-core/templates"
+export GIT_EXEC_PATH="\$PREFIX/libexec/git-core"
+export PAGER="cat"
+exec "\$PREFIX/bin/$bname" "\$@"
+EOF
+                        chmod 755 "$runtime_bin/$bname" 2>/dev/null || true
+                    fi
+                    ;;
+            esac
+        done <<< "$pkg_files"
+    fi
+}
+
 install_cached_deb() {
     local name="$1" ver="$2" arch="$3" cache="$4" keep_cache="${5:-${PKG_KEEP_CACHE:-0}}"
     if command -v python3 >/dev/null 2>&1 && [ -f "$PKG_LIB/pkg_core.py" ]; then
@@ -111,38 +154,7 @@ install_cached_deb() {
         rewrite_prefix "$PREFIX"
         printf '' | db_put "$name" "$ver" "$arch"
     fi
-    local runtime_bin="$PREFIX/../runtime/bin"
-    if [ -d "$runtime_bin" ] && [ -n "$pkg_files" ]; then
-        local p bname bin_file
-        while IFS= read -r p; do
-            case "$p" in
-                bin/*)
-                    bname="${p#bin/}"
-                    case "$bname" in */*|"") continue ;; esac
-                    bin_file="$PREFIX/bin/$bname"
-                    [ -f "$bin_file" ] || [ -L "$bin_file" ] || continue
-                    if [ ! -f "$runtime_bin/$bname" ]; then
-                        cat > "$runtime_bin/$bname" <<EOF
-#!/system/bin/sh
-PREFIX='$PREFIX'
-export PREFIX
-if [ -f "\$PREFIX/lib/libtermux-exec.so" ]; then
-  export LD_PRELOAD="\$PREFIX/lib/libtermux-exec.so"
-else
-  unset LD_PRELOAD
-fi
-export LD_LIBRARY_PATH="\$PREFIX/lib"
-export PATH="\$PREFIX/bin:/system/bin"
-export OPENSSL_CONF="\$PREFIX/etc/tls/openssl.cnf"
-export SSL_CERT_FILE="\$PREFIX/etc/tls/cert.pem"
-exec "\$PREFIX/bin/$bname" "\$@"
-EOF
-                        chmod 755 "$runtime_bin/$bname" 2>/dev/null || true
-                    fi
-                    ;;
-            esac
-        done <<< "$pkg_files"
-    fi
+    write_runtime_bridges "$pkg_files"
     printf 'Setting up %s (%s) ...\n' "$name" "$ver"
     [ "$keep_cache" = "1" ] || rm -f "$cache"
 }
@@ -533,4 +545,6 @@ main() {
     esac
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+    main "$@"
+fi

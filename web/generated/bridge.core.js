@@ -258,6 +258,48 @@ function rpcPathFrom(url) {
   return s.slice(best).replace(/^\/+/, '') || null;
 }
 
+var activeStreams = typeof Set === 'function' ? new Set() : null;
+
+// Server-streaming state RPCs that stay open indefinitely and must be
+// force-reset on host resume / reconnect if the WebView stalled them.
+// Excludes unary RPCs (never abort mutations/queries) and mic audio capture.
+function isStreamingRpcPath(path) {
+  if (!path) return false;
+  var s = String(path).split('?')[0];
+  if (/\/StreamAudioTranscription$/i.test(s)) return false;
+  return /\/Stream[A-Z][A-Za-z0-9_]*$/.test(s);
+}
+
+function makeResumeAbortError(reason) {
+  var msg = 'AGY stream reset (' + (reason || 'host-resume') + ')';
+  if (typeof DOMException === 'function') {
+    try { return new DOMException(msg, 'AbortError'); } catch (e) {}
+  }
+  var err = new Error(msg);
+  err.name = 'AbortError';
+  return err;
+}
+
+function resetActiveStreams(reason, minAgeMs) {
+  if (!activeStreams || activeStreams.size === 0) return 0;
+  var now = Date.now();
+  var grace = typeof minAgeMs === 'number' ? minAgeMs : 1500;
+  var targets = [];
+  activeStreams.forEach(function (entry) {
+    if (!entry.cleaned && (now - entry.startedAt) >= grace) {
+      targets.push(entry);
+    }
+  });
+  for (var i = 0; i < targets.length; i++) {
+    try {
+      targets[i].forceReset(reason);
+    } catch (e) {
+      warn('stream reset error', e);
+    }
+  }
+  return targets.length;
+}
+
 function installFetchRewrite() {
   if (global.__AG_FETCH_REWRITE__ || typeof global.fetch !== 'function') return;
   var origFetch = global.fetch.bind(global);
@@ -283,6 +325,148 @@ function installFetchRewrite() {
           resolve(fetchWithStartupRetry(u, opts, retries - 1, step + 1));
         }, delayMs);
       });
+    });
+  }
+
+  function fetchTrackedRpc(url, opts, rpcPath) {
+    if (!activeStreams || !isStreamingRpcPath(rpcPath)) {
+      return fetchWithStartupRetry(url, opts, 30, 0);
+    }
+
+    var callerSignal = opts && opts.signal ? opts.signal : null;
+    var innerCtrl = typeof AbortController === 'function' ? new AbortController() : null;
+    var onCallerAbort = null;
+    if (innerCtrl && callerSignal) {
+      if (callerSignal.aborted) {
+        try { innerCtrl.abort(callerSignal.reason); } catch (e) {}
+      } else {
+        onCallerAbort = function () {
+          try { innerCtrl.abort(callerSignal.reason); } catch (e) {}
+        };
+        try { callerSignal.addEventListener('abort', onCallerAbort, { once: true }); } catch (e) {}
+      }
+    }
+
+    var reqOpts = {};
+    if (opts) {
+      for (var k in opts) {
+        if (Object.prototype.hasOwnProperty.call(opts, k)) reqOpts[k] = opts[k];
+      }
+    }
+    if (innerCtrl) {
+      reqOpts.signal = innerCtrl.signal;
+    }
+
+    var entry = {
+      path: rpcPath,
+      startedAt: Date.now(),
+      controller: innerCtrl,
+      callerSignal: callerSignal,
+      cleaned: false,
+      forceReset: null
+    };
+
+    function cleanup() {
+      if (entry.cleaned) return;
+      entry.cleaned = true;
+      activeStreams.delete(entry);
+      if (callerSignal && onCallerAbort) {
+        try { callerSignal.removeEventListener('abort', onCallerAbort); } catch (e) {}
+      }
+    }
+
+    entry.forceReset = function (reason) {
+      var err = makeResumeAbortError(reason);
+      cleanup();
+      if (innerCtrl && !innerCtrl.signal.aborted) {
+        try { innerCtrl.abort(err); } catch (e) {}
+      }
+    };
+
+    activeStreams.add(entry);
+
+    return fetchWithStartupRetry(url, reqOpts, 30, 0).then(function (resp) {
+      if (
+        !resp ||
+        !resp.body ||
+        typeof resp.body.getReader !== 'function' ||
+        typeof ReadableStream !== 'function' ||
+        typeof Response !== 'function' ||
+        resp.status < 200 ||
+        resp.status === 204 ||
+        resp.status === 205 ||
+        resp.status === 304
+      ) {
+        cleanup();
+        return resp;
+      }
+
+      var origReader = resp.body.getReader();
+      var streamCtrl = null;
+      var closedOrErrored = false;
+
+      var wrappedBody = new ReadableStream({
+        start: function (controller) {
+          streamCtrl = controller;
+        },
+        pull: function (controller) {
+          return origReader.read().then(function (res) {
+            if (closedOrErrored) return;
+            if (res.done) {
+              closedOrErrored = true;
+              cleanup();
+              try { controller.close(); } catch (e) {}
+              return;
+            }
+            try { controller.enqueue(res.value); } catch (e) {}
+          }, function (err) {
+            if (closedOrErrored) return;
+            closedOrErrored = true;
+            cleanup();
+            try { controller.error(err); } catch (e) {}
+          });
+        },
+        cancel: function (reason) {
+          closedOrErrored = true;
+          cleanup();
+          try { return origReader.cancel(reason); } catch (e) {}
+        }
+      });
+
+      entry.forceReset = function (reason) {
+        var err = makeResumeAbortError(reason);
+        if (!closedOrErrored) {
+          closedOrErrored = true;
+          cleanup();
+          if (streamCtrl) {
+            try { streamCtrl.error(err); } catch (e) {}
+          }
+        } else {
+          cleanup();
+        }
+        try {
+          var cancelP = origReader.cancel(err);
+          if (cancelP && typeof cancelP.catch === 'function') {
+            cancelP.catch(function () {});
+          }
+        } catch (e) {}
+        if (innerCtrl && !innerCtrl.signal.aborted) {
+          try { innerCtrl.abort(err); } catch (e) {}
+        }
+      };
+
+      if (entry.cleaned) {
+        entry.forceReset('aborted-before-body');
+      }
+
+      return new Response(wrappedBody, {
+        status: resp.status,
+        statusText: resp.statusText,
+        headers: resp.headers
+      });
+    }, function (err) {
+      cleanup();
+      throw err;
     });
   }
 
@@ -323,7 +507,7 @@ function installFetchRewrite() {
               } else if (resource.signal) {
                 nextOpts.signal = resource.signal;
               }
-              return fetchWithStartupRetry(targetUrl, nextOpts, 30, 0);
+              return fetchTrackedRpc(targetUrl, nextOpts, rpath);
             });
           } catch (e) { warn('fetch rewrite (Request)', e); }
         }
@@ -345,7 +529,7 @@ function installFetchRewrite() {
           }
           next.headers = headers;
 
-          return fetchWithStartupRetry(url, next, 30, 0);
+          return fetchTrackedRpc(url, next, path);
         }
       }
     } catch (e) { warn('fetch rewrite', e); }
@@ -399,21 +583,48 @@ function installResumeHandler() {
     if (global.__AG_RESUME_HANDLER__) return;
     global.__AG_RESUME_HANDLER__ = true;
     var lastRecoveryAt = 0;
+    var hiddenAt = 0;
+    var pendingRecovery = null;
+    var dispatchingSynthetic = false;
+    var RECOVERY_DEBOUNCE_MS = 1000;
 
-    function triggerStreamRecovery(reason) {
+    function isDocumentHidden() {
+      return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    }
+
+    function triggerStreamRecovery(reason, detail) {
+      if (isDocumentHidden()) {
+        pendingRecovery = { reason: reason, detail: detail || null };
+        return;
+      }
       var now = Date.now();
-      if (now - lastRecoveryAt < 3000) return;
+      if (now - lastRecoveryAt < RECOVERY_DEBOUNCE_MS) return;
       lastRecoveryAt = now;
+      pendingRecovery = null;
       try {
-        global.dispatchEvent(new Event('focus'));
-        if (reason !== 'browser-online') {
-          global.dispatchEvent(new Event('online'));
-        }
-        if (typeof document !== 'undefined') {
-          document.dispatchEvent(new Event('visibilitychange'));
+        var minAgeMs = (detail && detail.wasStopped) ? 500 : 1500;
+        var resetCount = resetActiveStreams(reason, minAgeMs);
+        dispatchingSynthetic = true;
+        try {
+          global.dispatchEvent(new Event('focus'));
+          if (reason !== 'browser-online') {
+            global.dispatchEvent(new Event('online'));
+          }
+          if (typeof document !== 'undefined') {
+            document.dispatchEvent(new Event('visibilitychange'));
+          }
+        } finally {
+          dispatchingSynthetic = false;
         }
         if (typeof CustomEvent === 'function') {
-          global.dispatchEvent(new CustomEvent('agy:stream-recover', { detail: { reason: reason } }));
+          global.dispatchEvent(new CustomEvent('agy:stream-recover', {
+            detail: {
+              reason: reason,
+              resetCount: resetCount,
+              backgroundMs: detail && typeof detail.backgroundMs === 'number' ? detail.backgroundMs : 0,
+              wasStopped: !!(detail && detail.wasStopped)
+            }
+          }));
         }
       } catch (err) {
         if (typeof console !== 'undefined' && console.warn) {
@@ -422,15 +633,36 @@ function installResumeHandler() {
       }
     }
 
-    global.addEventListener('agy:host-resume', function () {
-      triggerStreamRecovery('host-resume');
+    global.addEventListener('agy:host-resume', function (ev) {
+      triggerStreamRecovery('host-resume', ev && ev.detail ? ev.detail : null);
     });
-    global.addEventListener('agy:network-online', function () {
-      triggerStreamRecovery('network-online');
+    global.addEventListener('agy:network-online', function (ev) {
+      triggerStreamRecovery('network-online', ev && ev.detail ? ev.detail : null);
     });
     global.addEventListener('online', function () {
-      triggerStreamRecovery('browser-online');
+      if (dispatchingSynthetic) return;
+      triggerStreamRecovery('browser-online', null);
     });
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', function () {
+        if (dispatchingSynthetic) return;
+        if (document.visibilityState === 'hidden') {
+          hiddenAt = Date.now();
+          return;
+        }
+        if (document.visibilityState === 'visible') {
+          var elapsed = hiddenAt > 0 ? (Date.now() - hiddenAt) : 0;
+          hiddenAt = 0;
+          if (pendingRecovery) {
+            var pending = pendingRecovery;
+            pendingRecovery = null;
+            triggerStreamRecovery(pending.reason, pending.detail);
+          } else if (elapsed >= 1500) {
+            triggerStreamRecovery('visibility-visible', { backgroundMs: elapsed, wasStopped: false });
+          }
+        }
+      });
+    }
   } catch (e) {
     if (typeof console !== 'undefined' && console.warn) {
       console.warn('[AGY] resume handler install error', e);

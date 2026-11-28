@@ -1,0 +1,12 @@
+{
+  "name": "github",
+  "displayName": "GitHub (Local)",
+  "version": "1.0.0",
+  "description": "Connect one or more local GitHub accounts to manage repositories, pull requests, issues, and workflows.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "List my open pull requests across connected GitHub accounts",
+    "Check the latest GitHub Actions workflow runs for this repository",
+    "Create a new issue or summarize recent commits on my work GitHub account"
+  ]
+}

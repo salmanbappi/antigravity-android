@@ -90,7 +90,7 @@ The core binary (`language_server`) is compiled for Linux/Glibc and runs on Andr
   - Polls local HTTPS readiness up to 60 seconds (`READY_TIMEOUT_MS = 60000`) for slow ARMv8.0-A cold starts.
   - Verifies exact SHA-256 leaf pinning against `@raw/agy_core_cert` via `matchesCert()`, invoked by `AgyWebViewClient.onReceivedSslError` alongside `TrustedCoreOrigin.matches()`.
 - **`OpenUrlWatcher`**:
-  - Captures Google OAuth redirects (`AGY_OPEN_URL=`, `ANTIGRAVITY_OPEN_URL:`, and `accounts.google.com` URLs) from core stdout and opens them in the external browser via `CustomTabLauncher` (also handles the permission-protected `com.agy.ACTION_OPEN_URL` broadcast).
+  - Captures Google OAuth redirects (`AGY_OPEN_URL=`, `ANTIGRAVITY_OPEN_URL:`, and `accounts.google.com` URLs) from core stdout and opens them in the external browser via `CustomTabLauncher` (also handles the permission-protected `com.agy.ACTION_OPEN_URL` broadcast). `CustomTabLauncher` (and `UriDispatcher`) runs `GoogleOAuthUrlRewriter.ensureAccountChooser()` on `https://accounts.google.com/o/oauth2/.../auth` URLs so `prompt` always includes `select_account` (preserving `consent` if present) and `login_hint`/`authuser` are stripped without altering other encoded query parameters.
 
 ### 2.2. WebView, UI & Startup Flow (`com.agy.ui`)
 
@@ -112,7 +112,7 @@ The core binary (`language_server`) is compiled for Linux/Glibc and runs on Andr
 
 | Endpoint / Action | Handler | Description |
 | :--- | :--- | :--- |
-| `notify` | `NotificationHandler` | Posts, updates, and cancels Android notifications on `agy_tasks` and `agy_alerts`. |
+| `notify` | `NotificationHandler` | Posts, updates, and cancels Android notifications on `agy_tasks` and `agy_alerts` (`IMPORTANCE_HIGH` with sound/vibration/badge and `EXTRA_CONVERSATION_ID` tap deep-linking). |
 | `open_url` | `BrowserHandler` | Opens external URLs and documents via `UriDispatcher`. |
 | `wakelock` | `PowerHandler` | Acquires and releases named partial wake locks for long-running scripts. |
 | `clipboard` / `clipboard_set` | `ClipboardHandler` | Reads and writes the system clipboard safely on the UI thread. |
@@ -130,7 +130,7 @@ The core binary (`language_server`) is compiled for Linux/Glibc and runs on Andr
 
 `AndroidBridge` exposes a tightly scoped `@JavascriptInterface`:
 
-- **Token-Gated Mutation APIs:** State-mutating and sensitive methods (`onUiReady`, `onUiError`, `openDirectoryPicker`, `setTheme`, `setThemeByUser`, `onVisualThemeChanged`, `setDesktopMode`, `saveBlob`, `notifyAgentEvent`, `hasClipboardImage`, `requestClipboardImagePaste`, `readClipboardImage`, `getSavedAccounts`, `syncCurrentAccount`, `activateSavedAccount`, `removeSavedAccount`, `restartCoreForAccountSwitch`) require `blobBridgeToken` verified with constant-time `MessageDigest.isEqual`.
+- **Token-Gated Mutation APIs:** State-mutating and sensitive methods (`onUiReady`, `onUiError`, `openDirectoryPicker`, `setTheme`, `setThemeByUser`, `onVisualThemeChanged`, `setDesktopMode`, `saveBlob`, `notifyAgentEvent`, `hasClipboardImage`, `requestClipboardImagePaste`, `readClipboardImage`, `startGitHubDeviceAuth`, `pollGitHubDeviceAuth`, `openGitHubDevicePage`, `copyGitHubDeviceCode`, `getSavedAccounts`, `syncCurrentAccount`, `activateSavedAccount`, `removeSavedAccount`, `restartCoreForAccountSwitch`) require `blobBridgeToken` verified with constant-time `MessageDigest.isEqual`. GitHub Device Flow (`com.agy.oauth.GitHubDeviceAuth`) talks strictly to `https://github.com/login/device/code` and `https://github.com/login/oauth/access_token`, locks browser launch to `https://github.com/login/device`, and never logs access tokens or device codes.
 - **Account Vault (`com.agy.oauth.AccountVaultStore`):** Persists sanitized profile metadata alongside owner-only (`0600`) snapshots of `jetski-standalone-oauth-token` in `files/.gemini/agy-account-vault.json`. Raw access/refresh tokens stay strictly in Java/disk and are never returned over `AndroidBridge`.
 - **Execution Isolation:** Arbitrary shell and root execution are excluded from `AndroidBridge`. Native root (`RootBridge`, `RootResilience`) stays in Java and shell helpers (`agy-root`, `su`, `sudo`, `agy-sys`), and `SplashController` destroys its `WebView` (`destroy()`) on `dismiss()`.
 

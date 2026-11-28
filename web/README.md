@@ -81,7 +81,11 @@ web/
 │       ├── theme_sync.js
 │       ├── agent_notify.js
 │       ├── clipboard_image_paste.js
+│       ├── back_navigation.js
+│       ├── github_device_auth.js
 │       ├── account_switcher.js
+│       ├── swarm_pane_chip.js
+│       ├── project_delete_folder.js
 │       └── startup_ready.js
 ├── src/                          # Modular source fragments
 │   ├── boot/                     # Early boot fragments
@@ -109,12 +113,16 @@ web/
 | **`boot/custom-elements-guard.js`** | IIFE | ~514 B | Guards against duplicate CustomElement registration crashes. |
 | **`boot/theme-bootstrap.js`** | IIFE | ~1.3 KB | Applies `light`/`dark` class and `colorScheme` synchronously before first paint. |
 | **`bridge.core.js`** | IIFE | ~16 KB | Polyfills `window.process`, config, CSRF, endpoint discovery, and `fetch` retry/stream recovery. |
-| **`patches/web_optimizations.js`** | IIFE | ~6.1 KB | Disables 300 ms tap delay, tracks `visualViewport` (`--agy-vvh`), disables expensive mobile `backdrop-filter` blurs, and isolates list layout (`content-visibility`). |
+| **`patches/web_optimizations.js`** | IIFE | ~9.3 KB | Disables 300 ms tap delay, tracks `visualViewport` (`--agy-vvh`), disables expensive mobile `backdrop-filter` blurs, isolates list layout (`content-visibility`), and applies container-responsive Flexbox & mobile Plugins/Accounts layout fixes. |
 | **`patches/touch_model_menu.js`** | IIFE | ~7.5 KB | Adapts hover-only Base UI model reasoning dropdowns to touch tap sequences with mutation-filtered observation (ignoring chat prose/code streaming). |
 | **`patches/theme_sync.js`** | IIFE | ~4.8 KB | Observes `<html>`/`<body>` theme classes and forwards token-gated changes to `AndroidBridge`. |
-| **`patches/agent_notify.js`** | IIFE | ~3.2 KB | Bridges agent audio cues and Notification API events to native clickable Android alerts. |
+| **`patches/agent_notify.js`** | IIFE | ~6.9 KB | Implements `window.nativeNotifications` (`send`, `onClicked` with cold-start buffering, `openSystemPreferences`), syncs `document.hasFocus()` to host foreground state, and bridges background agent completion/reply/approval alerts (plus `window.Notification` fallback) to clickable Android notifications with conversation deep-linking. |
 | **`patches/clipboard_image_paste.js`** | IIFE | ~5.8 KB | Handles clipboard and IME (`commitContent`) image paste into the chat composer. |
+| **`patches/back_navigation.js`** | IIFE | ~18 KB | Exposes `window.__agHandleBack()` for step-by-step Android Back across Settings/Customizations overlays (ancestor z-index, Back/Close/Escape), in-layout back controls, renderer-initiated `window.history.back()` (`__TSR_index > 0`), breadcrumb fallback, and clean Home `'exit'` signaling; also intercepts short taps on `[data-testid="mobile-back-to-home"]` on nested sub-routes for 1-step back (long-press >= 450ms or top-level routes jump straight to Home `/`). |
+| **`patches/github_device_auth.js`** | IIFE | ~31 KB | Injects 1-tap direct GitHub browser login (OAuth 2.0 Device Flow via `AndroidBridge`) into the `GitHub (Local)` Accounts card for both initial sign-in and multi-account "Add account", preserving manual PAT paste. |
 | **`patches/account_switcher.js`** | IIFE | ~16.7 KB | Renders Settings -> Accounts and Account -> Saved Accounts using native Settings primitives (`LU`/`PU`/`NU`/`OU`/`BI`/`Dgb`), auto-syncs logged-in accounts, and performs instant hot-swap switching. |
+| **`patches/swarm_pane_chip.js`** | IIFE | ~22 KB | Injects a compact, theme-matched `Swarm` quick-open chip (`shrink-0`) into the main chat composer toolbar (`[data-agent-composer-root]`) that directly opens/toggles the upstream Swarm UI sidecar pane (via Redux `sidePanelV2/setContent` + `sidePanel/setSidePanelOpen` and `extensibility` registry, with DOM `Open the Swarm UI` / `sidecar://swarm` fallback and 250 ms debounce) without modifying composer text. |
+| **`patches/project_delete_folder.js`** | IIFE | ~22 KB | Injects an optional, unchecked-by-default `"Also delete project folder from storage"` checkbox (with compact path preview and subtle danger styling when checked) into local Delete Project / Remove Workspace confirmation dialogs, invoking token-gated `Android.deleteProjectFolder(token, path)` on confirm while skipping remote/cloud and protected-root projects. |
 | **`patches/startup_ready.js`** | IIFE | ~4.7 KB | Signals first meaningful DOM render (`onUiReady`) and captures fatal JS errors. |
 | **`main.js`** | Raw + Patch | ~9.5 MB | Production React bundle patched by `patch_main.py`. |
 
@@ -151,10 +159,15 @@ web/
 | `hasClipboardImage` | `(token) => boolean` | Checks clipboard `ClipDescription` MIME types without triggering Android 12+ paste toast. |
 | `requestClipboardImagePaste` | `(token) => void` | Asynchronously decodes/downscales clipboard images into `window.__agPasteImage`. |
 | `readClipboardImage` | `(token) => string` | Synchronous clipboard image JSON fallback. |
+| `startGitHubDeviceAuth` | `(token, reqId, scope) => void` | Starts GitHub Device Flow (`POST https://github.com/login/device/code`) asynchronously and calls `window.__agGitHubDeviceAuthCallback(reqId, json)`. |
+| `pollGitHubDeviceAuth` | `(token, reqId, deviceCode) => void` | Polls `https://github.com/login/oauth/access_token` asynchronously and delivers status/token via `window.__agGitHubDeviceAuthCallback(reqId, json)`. |
+| `openGitHubDevicePage` | `(token, verificationUri) => boolean` | Opens GitHub's device verification page (locked to `https://github.com/login/device`) in the external browser. |
+| `copyGitHubDeviceCode` | `(token, userCode) => boolean` | Copies the 8-character GitHub device code to Android's clipboard on the UI thread. |
 | `getSavedAccounts` | `(token) => string` | Returns sanitized JSON array of saved accounts (no tokens exposed to JS). |
 | `syncCurrentAccount` | `(token, profileJson) => string` | Syncs the active token snapshot and UI profile metadata into `AccountVaultStore`. |
 | `activateSavedAccount` | `(token, accountId, outgoingProfileJson) => string` | Saves outgoing account state and atomically activates the target account's token on disk. |
 | `removeSavedAccount` | `(token, accountId) => string` | Removes a saved account from the persistent vault. |
+| `deleteProjectFolder` | `(token, rawPath) => string` | Validates a local project path against strict allowlist/denylist rules, queues no-follow recursive deletion on a background executor, and returns JSON `{ok, path, error}`. |
 | `restartCoreForAccountSwitch` | `(token) => void` | Clean core service restart fallback if hot-swap verification detects stale server state. |
 
 ---
@@ -163,7 +176,7 @@ web/
 
 - **Theme Engine:** `theme-bootstrap.js` sets initial colors synchronously before paint; `theme_sync.js` syncs dynamic theme changes via `MutationObserver`, `storage`, and `matchMedia`.
 - **Mobile & Touch (`web_optimizations.js`, `touch_model_menu.js`):** Eliminates 300 ms tap delay, keeps `--agy-vvh` synced with `visualViewport` during IME opening, and synthesizes pointer/keyboard events for hover-based model submenus.
-- **Core Transport (`bridge.core.js`):** Stubs `window.process`, rewrites ConnectRPC `/exa.*` fetches to `https://127.0.0.1:<enginePort>` with `x-codeium-csrf-token`, retries startup bursts (`fetchWithStartupRetry`), and triggers stream recovery on debounced `agy:network-online`.
+- **Core Transport (`bridge.core.js`):** Stubs `window.process`, rewrites ConnectRPC `/exa.*` fetches to `https://127.0.0.1:<enginePort>` with `x-codeium-csrf-token`, retries startup bursts (`fetchWithStartupRetry`), tracks long-lived server-streaming RPCs (e.g., `StreamAgentStateUpdates`) with an internal `AbortController` + pass-through `ReadableStream` handle, and actively force-resets stalled streams on `agy:host-resume` / `agy:network-online` / `visibilitychange` (deferred if hidden) without aborting the caller's signal so `main.js` reconnects and hydrates completed state.
 - **Workers & Audio:** Offloads PDF rendering (`pdf.worker.mjs`), Myers diff calculations (`diff_worker.js`), and 16 kHz microphone downsampling (`AudioWorkletProcessor`).
 
 ---
@@ -189,4 +202,4 @@ web/
 bash web/tests/selftest.sh
 ```
 
-Verifies isolated copy integrity, confirms upstream `web/main.js` SHA-256 stays unmodified, validates all generated bundles (`node --check`), and checks there are no double-wrapped IIFEs.
+Verifies isolated copy integrity, confirms upstream `web/main.js` SHA-256 stays unmodified, validates all generated bundles (`node --check`), checks there are no double-wrapped IIFEs, and runs Node.js behavioral checks covering `agy:host-resume` stalled-stream recovery, `window.__agHandleBack()` + on-screen `mobile-back-to-home` 1-step back/long-press passthrough, `patches/web_optimizations.js` Plugins mobile/Flexbox CSS, `patches/github_device_auth.js` Device Flow, and `patches/agent_notify.js` native notification bridge.

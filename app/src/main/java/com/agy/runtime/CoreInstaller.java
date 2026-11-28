@@ -21,14 +21,8 @@ public final class CoreInstaller {
     public static void installCore(RuntimeManager rm) {
         Context ctx = rm.appContext();
         File runtimeDir = rm.getRuntimeDir();
-        long lastUpdate = 0;
-        try {
-            lastUpdate = ctx.getPackageManager()
-                    .getPackageInfo(ctx.getPackageName(), 0).lastUpdateTime;
-        } catch (Exception ignored) {
-        }
         String manifestHash = getAssetManifestHash(ctx);
-        String expectedHash = (manifestHash != null ? manifestHash : "") + ":" + com.agy.BuildConfig.APP_VERSION_CODE + ":" + lastUpdate;
+        String expectedHash = (manifestHash != null ? manifestHash : "") + ":" + getApkVersionToken(ctx);
         boolean upToDate = isRuntimeUpToDate(rm, expectedHash);
 
         if (!upToDate) {
@@ -67,17 +61,8 @@ public final class CoreInstaller {
         rm.writeNetworkConfig();
         rm.startNetworkMonitor();
         OnboardingSeeder.seed(ctx, rm.getAppDataDir(), rm.getProjectsDir());
-        // Ensure builtin plugins (like Swarm) are extracted/synced into the app's builtin plugins dir
-        try {
-            File pluginsDir = new File(rm.getAppDataDir(), "builtin/plugins");
-            String[] pluginAssets = ctx.getAssets().list("plugins");
-            if (pluginAssets != null && pluginAssets.length > 0) {
-                AssetUnpacker.copyTree(ctx.getAssets(), "plugins", pluginsDir);
-                Log.i(TAG, "synced builtin plugins into " + pluginsDir);
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "cannot sync builtin plugins: " + e.getMessage());
-        }
+        // Sync builtin plugin overrides (Swarm) and seed bundled local plugins (GitHub)
+        syncBuiltinPlugins(rm);
         // Always ensure fallback shells and open-url shims are installed
         // in runtime/bin immediately regardless of whether the bionic prefix is extracted.
         ShellBridgeInstaller.installFallbackBridges(rm.getBinDir(), ctx);
@@ -92,6 +77,131 @@ public final class CoreInstaller {
             }
             com.agy.install.TermuxPrefixRewriter.patchElfBinaries(prefix, prefix.getAbsolutePath());
             ShellBridgeInstaller.install(rm);
+        }
+    }
+
+    /**
+     * Syncs bundled plugins from {@code assets/plugins}:
+     * <ul>
+     *   <li>Compile-time registered builtin overrides (currently {@code swarm}) are synced
+     *       into {@code <appDataDir>/builtin/plugins/<name>} on every call so Android patches
+     *       persist after {@code language_server} unpacks {@code builtin/.checksum}.</li>
+     *   <li>All other bundled local plugins (such as {@code github}) are seeded into
+     *       {@code <geminiDir>/config/plugins/<name>}, which {@code language_server} scans for
+     *       both plugin discovery and {@code auth.json} providers. Seeding is gated by
+     *       {@code .bundled_version} so fresh installs and APK upgrades install/update the
+     *       bundle without resurrecting a plugin the user explicitly uninstalled on the same
+     *       APK version, and without modifying {@code config.json} or
+     *       {@code plugin-secrets.json}. Any stale copy left under
+     *       {@code <appDataDir>/builtin/plugins/<name>} is removed.</li>
+     * </ul>
+     */
+    public static synchronized void syncBuiltinPlugins(RuntimeManager rm) {
+        Context ctx = rm.appContext();
+        try {
+            String[] pluginAssets = ctx.getAssets().list("plugins");
+            if (pluginAssets == null || pluginAssets.length == 0) {
+                return;
+            }
+            File builtinPluginsDir = new File(rm.getAppDataDir(), "builtin/plugins");
+            File configPluginsDir = rm.getConfigPluginsDir();
+            String apkVersionToken = getApkVersionToken(ctx);
+            boolean bundledUpToDate = isBundledPluginsUpToDate(configPluginsDir, apkVersionToken);
+            boolean seededAnyBundled = false;
+
+            for (String name : pluginAssets) {
+                String assetPath = "plugins/" + name;
+                String[] children = ctx.getAssets().list(assetPath);
+                if (children == null || children.length == 0) {
+                    continue;
+                }
+                if (isBuiltinPluginOverride(name)) {
+                    AssetUnpacker.copyTree(
+                            ctx.getAssets(), assetPath, new File(builtinPluginsDir, name));
+                    Log.i(TAG, "synced builtin plugin override into "
+                            + new File(builtinPluginsDir, name));
+                } else {
+                    deleteStaleBuiltinPluginDir(
+                            builtinPluginsDir, new File(builtinPluginsDir, name));
+                    if (!bundledUpToDate) {
+                        AssetUnpacker.copyTree(
+                                ctx.getAssets(), assetPath, new File(configPluginsDir, name));
+                        seededAnyBundled = true;
+                        Log.i(TAG, "seeded bundled local plugin into "
+                                + new File(configPluginsDir, name));
+                    }
+                }
+            }
+            if (!bundledUpToDate && seededAnyBundled) {
+                writeMarker(configPluginsDir, RuntimePaths.BUNDLED_PLUGINS_MARKER, apkVersionToken);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "cannot sync bundled plugins: " + e.getMessage());
+        }
+    }
+
+    private static boolean isBuiltinPluginOverride(String pluginName) {
+        return "swarm".equals(pluginName);
+    }
+
+    private static String getApkVersionToken(Context ctx) {
+        long lastUpdate = 0;
+        try {
+            lastUpdate = ctx.getPackageManager()
+                    .getPackageInfo(ctx.getPackageName(), 0).lastUpdateTime;
+        } catch (Exception ignored) {
+        }
+        return com.agy.BuildConfig.APP_VERSION_CODE + ":" + lastUpdate;
+    }
+
+    private static boolean isBundledPluginsUpToDate(File configPluginsDir, String expectedToken) {
+        if (expectedToken == null || expectedToken.isEmpty()) {
+            return false;
+        }
+        File marker = new File(configPluginsDir, RuntimePaths.BUNDLED_PLUGINS_MARKER);
+        if (!marker.isFile()) {
+            return false;
+        }
+        try (java.io.InputStream in = new java.io.FileInputStream(marker)) {
+            String actual = com.agy.util.IoUtil.readAll(in, "UTF-8").trim();
+            return expectedToken.equals(actual);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Removes a stale non-builtin plugin directory previously unpacked into
+     * {@code <appDataDir>/builtin/plugins/<name>}. Strictly scoped to children of
+     * {@code builtinPluginsDir}.
+     */
+    private static void deleteStaleBuiltinPluginDir(File builtinPluginsDir, File target) {
+        if (!target.exists()) {
+            return;
+        }
+        try {
+            String rootPath = builtinPluginsDir.getCanonicalPath();
+            String targetPath = target.getCanonicalPath();
+            if (!targetPath.startsWith(rootPath + File.separator)) {
+                Log.w(TAG, "refusing to delete outside builtin/plugins: " + target);
+                return;
+            }
+            deleteRecursive(target);
+            Log.i(TAG, "removed stale non-builtin plugin copy: " + target);
+        } catch (Exception e) {
+            Log.w(TAG, "cannot remove stale builtin plugin dir " + target + ": " + e.getMessage());
+        }
+    }
+
+    private static void deleteRecursive(File file) {
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                deleteRecursive(child);
+            }
+        }
+        if (!file.delete()) {
+            Log.w(TAG, "could not delete stale path: " + file);
         }
     }
 

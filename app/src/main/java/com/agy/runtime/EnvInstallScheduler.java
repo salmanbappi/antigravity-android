@@ -37,6 +37,9 @@ public final class EnvInstallScheduler {
                     // so bridges set the bionic env for each child only. Seeded
                     // packages can add commands, so refresh the bridge inventory after them.
                     ShellBridgeInstaller.install(rm, fresh || seeded);
+                    // Re-sync Android-patched builtin plugins (e.g. Swarm) after language_server
+                    // unpacks its own builtin/.checksum on first launch.
+                    CoreInstaller.syncBuiltinPlugins(rm);
                     Log.i(TAG, "env ready; bundle=" + manifest.bundleId
                             + " seeded=" + seeded + "; runtime/bin bridges refreshed");
                 } catch (Throwable e) {

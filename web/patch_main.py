@@ -78,6 +78,20 @@ def patch_main(file_path):
         print("[web-patch] Upgraded legacy setDesktopMode(v) call to include bridge token")
         modified = True
 
+    # Force plugin OAuth sign-in mode to PLUGIN_AUTH_SIGN_IN_MODE_REDIRECT (1) instead of
+    # PLUGIN_AUTH_SIGN_IN_MODE_PASTE (2). Upstream returns 2 for Web/Cider hosts, which uses
+    # https://antigravity.google/oauth-callback and fails with Google OAuth redirect_uri_mismatch.
+    # On AGY Android, language_server runs locally on 127.0.0.1 so localhost redirect (1) works.
+    oauth_mode_pattern = re.compile(
+        r'function\s+([A-Za-z0-9_$]+)\(([A-Za-z0-9_$]+)\)\{'
+        r'\2=\2\?\.host;'
+        r'return\s+\2!==void 0&&\(([A-Za-z0-9_$]+)\(([A-Za-z0-9_$]+)\.Web,\2\)\|\|\3\(\4\.Extension\.Cider,\2\)\)\?2:1\}'
+    )
+    content, oauth_count = oauth_mode_pattern.subn(r'function \1(\2){return 1}', content)
+    if oauth_count > 0:
+        print(f"[web-patch] Patched plugin OAuth sign-in mode to REDIRECT (1) ({oauth_count} match)")
+        modified = True
+
     if "Desktop Mode" in content or "ag_desktop_mode" in content:
         print("[web-patch] Desktop Mode toggle already present in main.js")
     else:

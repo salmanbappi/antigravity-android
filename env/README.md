@@ -13,6 +13,7 @@
 env/
 ├── README.md                 # Architecture & pkg specification (this file)
 ├── README                    # Legacy prefix-rewriting notes
+├── seed-packages.txt         # Default first-launch Termux seed packages (nodejs-lts)
 ├── build.sh                  # Stages bootstrap, overlay, and pkg into dist/env/
 ├── bootstrap/                # Base Termux bootstrap & repackaging scripts
 │   ├── bootstrap-aarch64.zip # Upstream Termux bootstrap archive
@@ -121,9 +122,10 @@ Extracted by `com.agy.install.EnvInstaller`:
 
 1. **`pkg` Performance & Safety [RESOLVED - Batch B]:** Replaced Bash `dd` `ar` loops, 4-pass `deb.sh` extraction, slow AWK `db_sync_dpkg`, recursive `resolver.sh` subshells, and hung `tuna` primary timeouts with `pkg_core.py`, parallel `curl -Z --http2` + per-file mirror fallback, `curl -z`, mtime caching, and `stage_install_deb`.
 2. **`agy-notify` & `agy-upgrade` Paths [RESOLVED]:** Removed developer-specific hardcoded logo path in `agy-notify` and fixed `$HOME` calculation (`dirname "$PREFIX"`) in `agy-upgrade`.
-3. **Selective `runtime/bin` Bridge Generation [RESOLVED]:** `pkg` generates bridges only for binaries installed by the current package rather than rescanning all of `$PREFIX/bin/*`.
-4. **`agy-daemon` Locking, Adaptive Sleep & Log Rotation [RESOLVED]:** Uses persistent `fcntl.flock` on `daemon.lock` with PID verification, eliminates duplicate lines in `daemon.log`, rotates `daemon.log` at 512 KB, caches `tasks.json` by `stat` (`st_mtime_ns`/`st_size`), and adapts loop sleep up to 30 s when idle.
-5. **Remaining Backlog:** Unify `liblse_compat` into `env/build.sh all` and consider sharing prefix-rewrite specs across Java/Python/Bash.
+3. **Selective `runtime/bin` Bridge Generation & Fallback Replacement [RESOLVED]:** `pkg` generates clean Bionic bridges (`unset LD_PRELOAD`) only for binaries installed by the current package rather than rescanning all of `$PREFIX/bin/*`, overwriting `# AGY fallback` shims while preserving non-fallback bridges.
+4. **Seed Packages (`seed-packages.txt`):** `env/seed-packages.txt` declares `nodejs-lts` (powering built-in Node.js sidecars such as Swarm); `env/build.sh` copies it into `dist/env/` and `make_manifest.py` hashes it into `manifest.json`'s `seedPackages` field.
+5. **`agy-daemon` Locking, Adaptive Sleep & Log Rotation [RESOLVED]:** Uses persistent `fcntl.flock` on `daemon.lock` with PID verification, eliminates duplicate lines in `daemon.log`, rotates `daemon.log` at 512 KB, caches `tasks.json` by `stat` (`st_mtime_ns`/`st_size`), and adapts loop sleep up to 30 s when idle.
+6. **Remaining Backlog:** Unify `liblse_compat` into `env/build.sh all` and consider sharing prefix-rewrite specs across Java/Python/Bash.
 
 ---
 

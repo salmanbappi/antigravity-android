@@ -31,8 +31,9 @@ public final class UriDispatcher {
                     || uriOrPath.contains("daily-cloudcode-pa.googleapis.com")) {
                 return false;
             }
+            String effectiveUrl = com.agy.oauth.GoogleOAuthUrlRewriter.ensureAccountChooser(uriOrPath);
             try {
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(uriOrPath));
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(effectiveUrl));
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 intent.putExtra("android.support.customtabs.extra.TITLE_VISIBILITY", 1);
                 context.startActivity(intent);

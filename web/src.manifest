@@ -63,5 +63,17 @@ src/patches/agent_notify/install.js
 bundle iife patches/clipboard_image_paste.js
 src/patches/clipboard_image_paste/install.js
 
+bundle iife patches/back_navigation.js
+src/patches/back_navigation/install.js
+
+bundle iife patches/github_device_auth.js
+src/patches/github_device_auth/install.js
+
 bundle iife patches/account_switcher.js
 src/patches/account_switcher/install.js
+
+bundle iife patches/swarm_pane_chip.js
+src/patches/swarm_pane_chip/install.js
+
+bundle iife patches/project_delete_folder.js
+src/patches/project_delete_folder/install.js

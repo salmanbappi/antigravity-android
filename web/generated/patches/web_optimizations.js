@@ -85,6 +85,19 @@ function installGpu(doc) {
         ' content-visibility: auto;' +
         ' contain-intrinsic-size: auto 120px; }' +
         '*{ -webkit-tap-highlight-color: transparent; }' +
+        /* Container-responsive Flexbox fixes for Plugin Accounts & MCP error rows:
+         * Upstream uses flex-wrap + min-w-0 flex-1 (flex-basis: 0%) next to fixed-width
+         * inputs/buttons (w-40 + Sign in = ~226px), so flex-wrap never triggers and text
+         * collapses into a 40-90px tall vertical strip on phones and narrow split panes. */
+        'section[aria-label="Accounts"] > div > div > div.flex-wrap > div.flex-1 {' +
+        ' flex: 1 1 240px !important; min-width: min(100%, 240px) !important; }' +
+        'section[aria-label="Accounts"] > div > div > div.flex-wrap > div.flex-1 > div.flex,' +
+        'section[aria-label="Accounts"] ul[aria-label="Signed-in accounts"] > li > div.flex-1 > div.flex {' +
+        ' flex-wrap: wrap; }' +
+        'section[aria-label="Accounts"] ul[aria-label="Signed-in accounts"] > li > div.flex-1 {' +
+        ' flex: 1 1 160px !important; min-width: min(100%, 160px) !important; }' +
+        '[data-testid="mcp-server-row"] div.flex-wrap > div.flex-1 {' +
+        ' flex: 1 1 200px !important; min-width: min(100%, 200px) !important; }' +
         /* Eliminate expensive full-screen backdrop blur passes on mid-range mobile GPUs */
         '@media (max-width: 768px), (pointer: coarse) {' +
         ' .surface-glass, .agy-fastpick.surface-glass, .quick-input-widget.surface-glass,' +
@@ -98,8 +111,37 @@ function installGpu(doc) {
         '}' +
         /* Mobile Customizations & Plugin / Sidecar UI Optimizations */
         '@media (max-width: 640px) {' +
-        ' [data-testid="plugin-detail"] > div > div {' +
-        '   padding-left: 12px !important; padding-right: 12px !important; padding-top: 14px !important; }' +
+        ' [data-testid="plugin-detail"] > div > div,' +
+        ' [data-testid="bundle-detail"] > div > div {' +
+        '   padding-left: 14px !important; padding-right: 14px !important; padding-top: 14px !important; }' +
+        ' [data-testid="plugin-detail"] > div > div > div,' +
+        ' [data-testid="bundle-detail"] > div > div > div {' +
+        '   padding-left: 0 !important; padding-right: 0 !important; }' +
+        ' section[aria-label="Accounts"] > div > div > div.flex-wrap {' +
+        '   align-items: flex-start !important; }' +
+        ' section[aria-label="Accounts"] div.flex.items-center:has(> input) {' +
+        '   width: 100% !important; flex-wrap: wrap !important; }' +
+        ' section[aria-label="Accounts"] div.flex.items-center:has(> input) > input {' +
+        '   flex: 1 1 140px !important; width: auto !important; min-width: 0 !important; height: 32px !important; }' +
+        ' section[aria-label="Accounts"] div.flex.items-center:has(> input) > button {' +
+        '   height: 32px !important; }' +
+        ' section[aria-label="Accounts"] p.truncate {' +
+        '   white-space: normal !important; overflow-wrap: anywhere !important; }' +
+        ' [data-testid="plugin-detail"] div.rounded-md.border.flex.items-center.justify-between,' +
+        ' [data-testid="bundle-detail"] div.rounded-md.border.flex.items-center.justify-between,' +
+        ' [data-testid="mcp-server-browser-sign-in"] {' +
+        '   flex-wrap: wrap !important; gap: 8px !important; }' +
+        ' [data-testid="plugin-detail"] div.rounded-md.border.flex.items-center.justify-between > div,' +
+        ' [data-testid="bundle-detail"] div.rounded-md.border.flex.items-center.justify-between > div {' +
+        '   flex: 1 1 200px !important; min-width: min(100%, 200px) !important; }' +
+        ' [data-testid="mcp-server-browser-sign-in"] > span {' +
+        '   flex: 1 1 100% !important; }' +
+        ' [data-testid="plugin-detail"] div.flex.items-center:has(> h1),' +
+        ' [data-testid="bundle-detail"] div.flex.items-center:has(> h1) {' +
+        '   flex-wrap: wrap !important; row-gap: 4px !important; }' +
+        ' [data-testid="plugin-detail"] div.flex.items-center > h1,' +
+        ' [data-testid="bundle-detail"] div.flex.items-center > h1 {' +
+        '   white-space: normal !important; overflow-wrap: anywhere !important; }' +
         ' [role="tablist"][aria-label="Plugin details"] {' +
         '   flex-wrap: nowrap !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch;' +
         '   scrollbar-width: none; padding-bottom: 4px; }' +

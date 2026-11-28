@@ -377,7 +377,7 @@
 @media (prefers-reduced-motion: reduce) { .o2-tvth { transition: none; } }
 
 /* Hive map (Graph tab): threads as honeycomb cells, bees where they work. */
-.pane .hv-stage { position: relative; }
+.pane .hv-stage { position: relative; overflow: hidden; contain: layout style; }
 /* Zoom: the map scrolls inside its box; drag to pan. */
 .pane .hv-bar { display: flex; align-items: flex-start; gap: 12px; }
 .pane .hv-bar .hv-sum { flex: 1; min-width: 0; }
@@ -413,8 +413,9 @@
 .pane .hv-rs { flex: none; font-size: 12px; font-weight: 500; color: var(--o2-muted); white-space: nowrap; }
 .pane .hv-rs.working { color: var(--o2-info); } .pane .hv-rs.wait, .pane .hv-rs.needs { color: var(--o2-warn); } .pane .hv-rs.issue { color: var(--o2-bad); } .pane .hv-rs.done { color: var(--o2-ok); }
 .pane .hv-re { margin: 12px 0 0; font-size: 14px; color: var(--o2-muted); }
+.pane .hv-bees { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
 .pane .hv-bees.jump .hv-bee { transition: none; }
-.pane .hv-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.pane .hv-svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; overflow: hidden; z-index: 0; }
 .pane .hv-cell { fill: var(--o2-card); stroke: var(--o2-border); }
 .pane .hv-cell.full { fill: color-mix(in srgb, var(--o2-ok) 9%, var(--o2-card)); }
 .pane .hv-prog { fill: none; stroke: var(--o2-ok); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
@@ -435,29 +436,26 @@
 .pane .hv-sum i { width: 7px; height: 7px; border-radius: 999px; background: var(--o2-info); }
 .pane .hv-sum .warn i { background: var(--o2-warn); } .pane .hv-sum .bad i { background: var(--o2-bad); } .pane .hv-sum .ok i { background: var(--o2-ok); }
 .pane .hv-ln { fill: none; }
-.pane .hv-ln.wait { stroke: var(--o2-warn); stroke-width: 1.6; stroke-dasharray: 4 4; opacity: .55; animation: hv-march 1s linear infinite; }
+.pane .hv-ln.wait { stroke: var(--o2-warn); stroke-width: 1.6; stroke-dasharray: 4 4; opacity: .55; }
 .pane .hv-ln.beam { stroke: color-mix(in srgb, var(--o2-info) 70%, var(--o2-fg)); stroke-width: 1.5; stroke-linecap: round; opacity: .55; }
-.pane .hv-svg.fresh .hv-ln.beam { animation: hv-fade .35s ease-out; }
 .pane .hv-bd { fill: color-mix(in srgb, var(--o2-info) 70%, var(--o2-fg)); opacity: .9; }
 .pane .hv-ah { fill: var(--o2-warn); opacity: .55; }
-@keyframes hv-march { to { stroke-dashoffset: -8; } }
-@keyframes hv-fade { from { opacity: 0; } }
-.pane .hv-bee { all: unset; box-sizing: border-box; position: absolute; left: 0; top: 0; cursor: pointer; transition: transform .55s cubic-bezier(.3,.7,.2,1), opacity .3s, filter .3s; }
+.pane .hv-bee { all: unset; box-sizing: border-box; position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer; transition: none; }
 .pane .hv-bee:focus-visible { outline: 2px solid var(--sw-ring, var(--o2-info)); outline-offset: 3px; border-radius: 8px; }
 .pane .hv-bee .beebox { --cell: 2px; width: 44px; height: 36px; }
 .pane .hv-bee.sz-q .beebox { --cell: 3px; width: 66px; height: 54px; }
 .pane .hv-bee.sz-xs .beebox { --cell: 1px; width: 22px; height: 18px; }
 .pane .hv-bee.sz-xs .hv-dot { width: 6px; height: 6px; border-width: 1px; right: -3px; top: -3px; }
 .pane .hv-bee .gsh { display: none; }
-.pane .hv-bee.working .beebox { animation: o2-bob 1.1s ease-in-out infinite; }
-.pane .hv-bee.wait .beewrap { rotate: -14deg; }
+.pane .hv-bee-img { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.pane .hv-bee.wait .beewrap { transform: rotate(-14deg); }
 .pane .hv-bee.retired { opacity: .34; filter: grayscale(1); }
 .pane .hv-bee.unborn { opacity: 0; pointer-events: none; }
 .pane .hv-dot { position: absolute; right: -2px; top: -2px; width: 9px; height: 9px; border-radius: 999px; border: 2px solid var(--o2-card); display: none; }
 .pane .hv-bee.wait .hv-dot, .pane .hv-bee.needs .hv-dot { display: block; background: var(--o2-warn); }
 .pane .hv-bee.issue .hv-dot { display: block; background: var(--o2-bad); }
 .pane .hv-bee.done .hv-dot { display: block; background: var(--o2-ok); }
-.pane .hv-nm { position: absolute; top: 100%; left: 50%; translate: -50% 0; margin-top: 1px; max-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--o2-muted); display: none; }
+.pane .hv-nm { position: absolute; top: 100%; left: 50%; margin-left: -28px; width: 56px; text-align: center; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--o2-muted); display: none; }
 .pane .hv-bees.names .hv-bee:not(.q) .hv-nm { display: block; }
 .pane .hv-key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 12px; font-size: 12px; color: var(--o2-muted); }
 .pane .hv-key span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -471,6 +469,8 @@
 .pane .hv-key i.hv-kw::after { content: ''; position: absolute; right: -6px; top: -5px; border: 4px solid transparent; border-left: 7px solid var(--o2-warn); border-right: 0; }
 /* With the hive drawn, the mention graph, its legend and its two switches step aside. */
 #tab-graph.hive-on #graph, #tab-graph.hive-on .graph-legend, #tab-graph.hive-on .player .switch { display: none; }
+/* Disable 60fps GPU ping ring animations on Live dots to prevent Android WebView compositor flicker over the Hive/Graph SVG stage. */
+#live .live-dot::after, #tab-graph .live-dot::after { animation: none !important; display: none !important; }
 @media (max-width: 600px) {
   .pane .o2-lead { padding: 8px 10px; gap: 10px; }
   .pane .o2-crew { gap: 6px; }
@@ -485,4 +485,4 @@
   }
   .pane .o2-mav.bee { width: 44px; height: 38px; }
 }
-@media (prefers-reduced-motion: reduce) { .pane .hv-bee, .pane .hv-bee.working .beebox, .pane .hv-ln.wait, .pane .hv-svg.fresh .hv-ln.beam { transition: none; animation: none; } }
+@media (prefers-reduced-motion: reduce) { .pane .hv-bee { transition: none; } }

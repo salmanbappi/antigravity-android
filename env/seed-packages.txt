@@ -1,0 +1,3 @@
+# Default Termux packages installed on first launch by SeedPackageInstaller.
+# nodejs-lts powers built-in Node.js sidecars such as Swarm.
+nodejs-lts

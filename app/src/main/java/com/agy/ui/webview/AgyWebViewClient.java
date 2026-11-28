@@ -1,5 +1,6 @@
 package com.agy.ui.webview;
 
+import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.net.Uri;
@@ -187,6 +188,7 @@ public final class AgyWebViewClient extends WebViewClient {
     }
 
     @Override
+    @TargetApi(Build.VERSION_CODES.O)
     public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
         boolean didCrash = false;
         int priority = -1;

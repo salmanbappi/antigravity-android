@@ -14,6 +14,7 @@ public final class RuntimePaths {
     /** Written after runtime extraction + manifest verification. Skips re-extract. */
     public static final String RUNTIME_MARKER = ".installed";
     public static final String WEB_MARKER = ".web_installed";
+    public static final String BUNDLED_PLUGINS_MARKER = ".bundled_version";
 
     public static final String BIN_DIR = "runtime/bin";
     public static final String LIB_DIR = "runtime/lib";
@@ -24,11 +25,14 @@ public final class RuntimePaths {
     /**
      * The core resolves its state under {@code $HOME/.gemini/<app_data_dir>}
      * (HOME = getFilesDir(), app_data_dir = "antigravity-app"). It resolves
-     * projects under {@code $HOME/.gemini/config/projects}.
+     * projects under {@code $HOME/.gemini/config/projects} and user/local
+     * plugins (including {@code auth.json} providers) under
+     * {@code $HOME/.gemini/config/plugins}.
      */
     public static final String GEMINI_DIR = ".gemini";
     public static final String APP_DATA_DIR_NAME = "antigravity-app";
     public static final String CONFIG_PROJECTS = "config/projects";
+    public static final String CONFIG_PLUGINS = "config/plugins";
 
     private final Context appContext;
 
@@ -66,5 +70,9 @@ public final class RuntimePaths {
 
     public File getProjectsDir() {
         return new File(getGeminiDir(), CONFIG_PROJECTS);
+    }
+
+    public File getConfigPluginsDir() {
+        return new File(getGeminiDir(), CONFIG_PLUGINS);
     }
 }
